@@ -1,1 +1,1 @@
-
+include!(concat!(env!("OUT_DIR"), "/wifipartyrs.items.rs"));

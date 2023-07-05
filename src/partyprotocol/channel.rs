@@ -1,30 +1,50 @@
 use std::{
     fmt,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
-    ops::Deref,
-    rc::Rc,
-    thread, vec,
+    net::{SocketAddr, SocketAddrV4, UdpSocket},
+    sync::Arc,
+    thread,
 };
+use super::packet::Packet;
+use prost::Message;
 
 pub struct ChannelConfig {
     name: String,
-    handler: Box<dyn Fn() -> ()>,
+    handler: Cb,
+}
+
+type Cb = Box<dyn Fn(Packet, SocketAddr)->() + Send + 'static>;
+
+
+struct ReceiveChannel{
+    name: String,
+    id: u32,
+    callback: Cb,
+}
+
+impl ReceiveChannel{
+    pub fn new(name: String, id: u32, callback: Cb)->ReceiveChannel{
+        ReceiveChannel{
+            name: name,
+            id,
+            callback,
+        }
+    }
 }
 
 pub struct Channel {
     name: String,
-    id: i32,
-    socket: Rc<UdpSocket>,
-    callback: Box<dyn Fn() -> ()>,
+    id: u32,
+    socket: Arc<UdpSocket>,
+    callback: Option<Cb>,
 }
 
 impl Channel {
-    pub fn new(name: String, socket: &Rc<UdpSocket>, id: i32, handler: impl Fn() -> ()) -> Channel {
+    pub fn new(name: String, socket: &Arc<UdpSocket>, id: u32, handler: Cb) -> Channel {
         Channel {
             name,
             id,
             socket: socket.clone(),
-            callback: Box::new(handler),
+            callback: Some(handler),
         }
     }
 
@@ -44,17 +64,27 @@ impl Channel {
         let bind_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), addr.port());
         let socket = UdpSocket::bind(bind_addr)
             .expect("Cannot bind address. Isanother instance already running?");
-        let socket = Rc::new(socket);
+        let socket = Arc::new(socket);
 
-        let channels = channel_configs
+        let mut channels: Vec<_> = channel_configs
             .into_iter()
             .enumerate()
-            .map(|(id, cfg)| Channel::new(cfg.name, &socket, id as i32, cfg.handler))
+            .map(|(id, cfg)|Channel::new(cfg.name, &socket, id as u32, cfg.handler)
+            )
+            .collect();
+
+        let receive_channels: Vec<_>=channels
+            .iter_mut()
+            .map(|ch|ReceiveChannel::new(
+                ch.name.clone(),
+                ch.id,
+                ch.callback.take().unwrap()
+            ))
             .collect();
 
         thread::spawn(move || loop {
-            const buf_length: usize = 4096;
-            let mut buf = [0; buf_length];
+            const BUF_LENGTH: usize = 4096;
+            let mut buf = [0; BUF_LENGTH];
             let result = socket.recv_from(&mut buf);
 
             let Ok((length,src)) = result else{
@@ -62,19 +92,43 @@ impl Channel {
                 continue;
             };
 
-            if length == buf_length {
+            if length >= BUF_LENGTH {
                 println!("Probable truncation occurred when receiving data from UDP socket");
             }
 
-            for channel in channels {}
-        });
+            let valid_buf=&buf[..length];
+            let packet=Packet::decode(valid_buf);
 
+            let Ok(packet)=packet else{
+                println!("Received an invalid packet");
+                continue;
+            };
+            if packet.version!=1 {
+                println!("Received an unsupported packet: version incompatible");
+                continue;
+            }
+
+            for ch in &receive_channels{
+                if ch.id==packet.channel_id{
+                    (ch.callback)(packet.clone(),src);
+
+                    // Channel id should be unique
+                    break;
+                }
+            }
+        });
         channels
     }
 }
 
 impl fmt::Display for Channel {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.name)
+        write!(f, "Channel {}", self.name)
+    }
+}
+
+impl fmt::Display for ReceiveChannel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ReceiveChannel {}", self.name)
     }
 }
