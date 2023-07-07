@@ -4,15 +4,16 @@ use std::{
     sync::Arc,
     thread,
 };
-use super::packet::Packet;
+use super::packet::{Packet};
 use prost::Message;
+use safe_transmute::transmute_to_bytes_vec;
 
 pub struct ChannelConfig {
     name: String,
     handler: Cb,
 }
 
-type Cb = Box<dyn Fn(Packet, SocketAddr)->() + Send + 'static>;
+type Cb = Box<dyn FnMut(Packet, SocketAddr)->() + Send + 'static>;
 
 
 struct ReceiveChannel{
@@ -35,16 +36,20 @@ pub struct Channel {
     name: String,
     id: u32,
     socket: Arc<UdpSocket>,
+    addr: SocketAddrV4,
     callback: Option<Cb>,
+    send_index: u32,
 }
 
 impl Channel {
-    pub fn new(name: String, socket: &Arc<UdpSocket>, id: u32, handler: Cb) -> Channel {
+    pub fn new(name: String, socket: Arc<UdpSocket>, addr: SocketAddrV4, id: u32, handler: Cb) -> Channel {
         Channel {
             name,
             id,
-            socket: socket.clone(),
+            socket,
+            addr,
             callback: Some(handler),
+            send_index: 0,
         }
     }
 
@@ -55,7 +60,7 @@ impl Channel {
     /// - channel_names: A vector of strings. Will be used to build channels. Channel IDs are determined based on the order of appearance.
     ///
     /// # Returns Vec<Channel>
-    pub fn build(addr: Option<&str>, channel_configs: Vec<ChannelConfig>) -> Vec<Channel> {
+    pub fn build(channel_configs: Vec<ChannelConfig>, addr: Option<&str>) -> Vec<Channel> {
         let addr: SocketAddrV4 = addr
             .unwrap_or("239.195.10.10:8355")
             .parse()
@@ -63,13 +68,13 @@ impl Channel {
 
         let bind_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), addr.port());
         let socket = UdpSocket::bind(bind_addr)
-            .expect("Cannot bind address. Isanother instance already running?");
+            .expect("Cannot bind address. Is another instance already running?");
         let socket = Arc::new(socket);
 
         let mut channels: Vec<_> = channel_configs
             .into_iter()
             .enumerate()
-            .map(|(id, cfg)|Channel::new(cfg.name, &socket, id as u32, cfg.handler)
+            .map(|(id, cfg)|Channel::new(cfg.name, socket.clone(), addr.clone(),id as u32, cfg.handler)
             )
             .collect();
 
@@ -118,6 +123,26 @@ impl Channel {
             }
         });
         channels
+    }
+
+    fn send(self: &mut Channel, sound: Vec<i16>) -> Result<(),&str>{
+        let mut packet=Packet::default();
+
+        packet.version=1;
+        packet.channel_id=self.id;
+        packet.index=self.send_index;
+        self.send_index+=1;
+
+        let Ok(data)=transmute_to_bytes_vec(sound) else{
+            return Err("Failed to convert sound data to bytes");
+        };
+        packet.data=data;
+
+        let mut buf=Vec::with_capacity(packet.encoded_len());
+        packet.encode(&mut buf);
+
+        self.socket.send_to(&buf, self.addr);
+        Ok(())
     }
 }
 
