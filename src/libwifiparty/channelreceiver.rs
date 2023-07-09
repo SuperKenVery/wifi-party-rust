@@ -2,7 +2,7 @@
 // into a buffer, and handle out-of-order delivery and
 // packet loss.
 
-use safe_transmute::{transmute_to_bytes_vec,transmute_many, SingleManyGuard};
+use zerocopy::ByteSlice;
 
 use crate::partyprotocol::channel::ChannelConfig;
 
@@ -77,7 +77,7 @@ impl ChannelReceiver{
 
     // Receive a packet, and handle it.
     fn receive_packet(&mut self, packet: Packet, addr: SocketAddr){
-        if packet.index==self.lidx+1{
+        if packet.header.index.get()==self.lidx+1{
             // Packet is in order
             self.lidx+=1;
 
@@ -90,7 +90,7 @@ impl ChannelReceiver{
                     self.ridx=0;
                 }
 
-                self.segments[self.widx]=packet.data;
+                // self.segments[self.widx]=packet.data;
                 self.widx+=1;
                 if self.widx==self.segments.len(){
                     self.widx=0;

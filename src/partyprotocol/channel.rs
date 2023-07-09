@@ -4,16 +4,15 @@ use std::{
     sync::Arc,
     thread,
 };
-use super::packet::{Packet};
-use prost::Message;
-use safe_transmute::transmute_to_bytes_vec;
+use super::packet::{SerdePacket,Header};
+use zerocopy::{ByteSlice, LayoutVerified, byteorder};
 
 pub struct ChannelConfig {
-    name: String,
-    handler: Cb,
+    pub name: String,
+    pub handler: Cb,
 }
 
-type Cb = Box<dyn FnMut(Packet, SocketAddr)->() + Send + 'static>;
+type Cb = Box<dyn FnMut(SerdePacket<&[u8]>, SocketAddr)->() + Send + 'static>;
 
 
 struct ReceiveChannel{
@@ -102,48 +101,45 @@ impl Channel {
             }
 
             let valid_buf=&buf[..length];
-            let packet=Packet::decode(valid_buf);
+            let packet=SerdePacket::decode(valid_buf);
 
-            let Ok(packet)=packet else{
+            let Some(packet)=packet else{
                 println!("Received an invalid packet");
                 continue;
             };
-            if packet.version!=1 {
-                println!("Received an unsupported packet: version incompatible");
-                continue;
-            }
+            // if packet.version!=1 {
+            //     println!("Received an unsupported packet: version incompatible");
+            //     continue;
+            // }
 
-            for ch in &receive_channels{
-                if ch.id==packet.channel_id{
-                    (ch.callback)(packet.clone(),src);
+            // for ch in &receive_channels{
+            //     if ch.id==packet.channel_id{
+            //         (ch.callback)(packet.clone(),src);
 
-                    // Channel id should be unique
-                    break;
-                }
-            }
+            //         // Channel id should be unique
+            //         break;
+            //     }
+            // }
         });
         channels
     }
 
-    fn send(self: &mut Channel, sound: Vec<i16>) -> Result<(),&str>{
-        let mut packet=Packet::default();
+    // fn send(self: &mut Channel, sound: Vec<i16>) -> Result<(),&str>{
+    //     let packet=Packet{
+    //         header: Header{
+    //             identifier: [b'w',b'p',b'p',0],
+    //             channel: self.id,
+    //             index: self.send_index,
+    //         },
+    //         body: sound,
+    //     };
+    //     self.send_index+=1;
 
-        packet.version=1;
-        packet.channel_id=self.id;
-        packet.index=self.send_index;
-        self.send_index+=1;
+    //     let mut buf=Vec::with_capacity(packet.encoded_len());
 
-        let Ok(data)=transmute_to_bytes_vec(sound) else{
-            return Err("Failed to convert sound data to bytes");
-        };
-        packet.data=data;
-
-        let mut buf=Vec::with_capacity(packet.encoded_len());
-        packet.encode(&mut buf);
-
-        self.socket.send_to(&buf, self.addr);
-        Ok(())
-    }
+    //     self.socket.send_to(&buf, self.addr);
+    //     Ok(())
+    // }
 }
 
 impl fmt::Display for Channel {
