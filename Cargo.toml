@@ -7,4 +7,5 @@ edition = "2021"
 prost-build = "0.11.9"
 
 [dependencies]
+safe-transmute = "0.11.2"
 zerocopy = "0.6.1"

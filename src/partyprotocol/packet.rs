@@ -1,7 +1,9 @@
-use std::{str::Bytes, vec};
+use std::{str::Bytes, vec, mem::MaybeUninit};
 
 use zerocopy::{AsBytes, FromBytes,Unaligned,ByteSlice,LayoutVerified, ByteSliceMut,U32,
 byteorder::NetworkEndian, I16, NativeEndian};
+
+use safe_transmute::{transmute_many, SingleManyGuard};
 
 #[derive(FromBytes, AsBytes, Unaligned)]
 #[repr(C)]
@@ -20,6 +22,10 @@ struct SerdePacket<B: ByteSlice>{
 impl<B: ByteSlice> SerdePacket<B> {
     pub fn decode(bytes: B) -> Option<SerdePacket<B>> {
         let (header,body)=LayoutVerified::new_from_prefix(bytes)?;
+
+        if body.len()%2!=0 {
+            return None;
+        }
 
         Some(SerdePacket { header, data: body })
     }
@@ -51,39 +57,74 @@ impl<B: ByteSlice> SerdePacket<B> {
 
 }
 
-pub struct Packet{
+enum Buffer{
+    Sound(Box<[i16]>),
+    Bytes(Box<[u8]>),
+}
+pub struct Packet<'a>{
     pub header: Header,
-    pub data: Vec<i16>,
+    pub data: &'a [i16],
+    buffer: Buffer, // Take ownership of the buffer
 }
 
-impl Packet{
-    pub fn new(channel: u32, index: u32, data: Vec<i16>) -> Packet {
+impl<'a> Packet<'a>{
+    pub fn new(channel: u32, index: u32, data: Box<[i16]>) -> Packet {
+
         Packet{
             header: Header{
                 identifier: [b'w',b'p',b'p',0],
                 channel: channel.into(),
                 index: index.into(),
             },
-            data,
+            data: &*data,
+            buffer: Buffer::Sound(data),
         }
     }
 
-    fn s(&self){
+    pub fn encode(&self) -> Vec<u8> {
+        // Convert to network endian
         let mut buf=self.data.as_bytes_mut();
         assert!(buf.len()%2==0);
 
         for i in 0..buf.len()/2{
             let mut num_buf: &[u8;2]=&buf[i*2..][..2].try_into().unwrap();
             let num=I16::<NativeEndian>::from_bytes(*num_buf);
-            let num=I16::<NetworkEndian>::from(num.into());
+            let num=I16::<NetworkEndian>::new(num.get());
             num_buf.copy_from_slice(num.as_bytes());
         }
 
-        let serdep=SerdePacket::<&[u8]>{
+        SerdePacket::<&[u8]>{
             header: LayoutVerified::<&[u8],Header>::new(self.header.as_bytes()).unwrap(),
-            data: self.data.into(),
+            data: self.data.as_bytes(),
+        }.encode()
+    }
+
+    // Takes ownership of the buffer
+    pub fn decode(buf: Box<[u8]>) -> Option<Packet> {
+        let (header,body)=LayoutVerified::<&[u8],Header>::new_from_prefix(&*buf)?;
+        // Convert to native endian
+        let mut sp=SerdePacket::decode(&*buf)?;
+
+        let mut buf=sp.data.as_bytes_mut();
+        assert!(buf.len()%2==0);
+
+        for i in 0..buf.len()/2{
+            let mut num_buf: &[u8;2]=&buf[i*2..][..2].try_into().unwrap();
+            let num=I16::<NetworkEndian>::from_bytes(*num_buf);
+            let num=I16::<NativeEndian>::new(num.get());
+            num_buf.copy_from_slice(num.as_bytes());
+        }
+
+        let data=transmute_many::<i16,SingleManyGuard>(&buf);
+        let Ok(data)=data else{
+            println!("Failed to transmute data: {:?}", data);
+            return None;
         };
 
+        Some(Packet{
+            header: sp.header,
+            data,
+        })
     }
 }
 

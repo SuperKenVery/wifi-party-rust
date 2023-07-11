@@ -310,6 +310,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "safe-transmute"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98a01dab6acf992653be49205bdd549f32f17cb2803e8eacf1560bf97259aae8"
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -356,6 +362,7 @@ name = "wifi-party-rust"
 version = "0.1.0"
 dependencies = [
  "prost-build",
+ "safe-transmute",
  "zerocopy",
 ]
 

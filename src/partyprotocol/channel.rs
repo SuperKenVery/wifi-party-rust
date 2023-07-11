@@ -1,11 +1,12 @@
+use core::slice::SlicePattern;
 use std::{
     fmt,
     net::{SocketAddr, SocketAddrV4, UdpSocket},
     sync::Arc,
-    thread,
+    thread, io::BufRead,
 };
 use super::packet::{SerdePacket,Header};
-use zerocopy::{ByteSlice, LayoutVerified, byteorder};
+use zerocopy::{ByteSlice, LayoutVerified, byteorder, AsBytes};
 
 pub struct ChannelConfig {
     pub name: String,
@@ -88,7 +89,8 @@ impl Channel {
 
         thread::spawn(move || loop {
             const BUF_LENGTH: usize = 4096;
-            let mut buf = [0; BUF_LENGTH];
+            let mut buf=vec![0;BUF_LENGTH];
+
             let result = socket.recv_from(&mut buf);
 
             let Ok((length,src)) = result else{
@@ -100,26 +102,23 @@ impl Channel {
                 println!("Probable truncation occurred when receiving data from UDP socket");
             }
 
-            let valid_buf=&buf[..length];
-            let packet=SerdePacket::decode(valid_buf);
+            buf.truncate(length);
+            let buf=buf.into_boxed_slice();
+            let packet=SerdePacket::decode(buf);
 
             let Some(packet)=packet else{
                 println!("Received an invalid packet");
                 continue;
             };
-            // if packet.version!=1 {
-            //     println!("Received an unsupported packet: version incompatible");
-            //     continue;
-            // }
 
-            // for ch in &receive_channels{
-            //     if ch.id==packet.channel_id{
-            //         (ch.callback)(packet.clone(),src);
+            for ch in &receive_channels{
+                if ch.id==packet.header.channel{
+                    (ch.callback)(packet,src);
 
-            //         // Channel id should be unique
-            //         break;
-            //     }
-            // }
+                    // Channel id should be unique
+                    break;
+                }
+            }
         });
         channels
     }
