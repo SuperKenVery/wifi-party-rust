@@ -2,17 +2,12 @@
 // into a buffer, and handle out-of-order delivery and
 // packet loss.
 
-use zerocopy::ByteSlice;
-
 use crate::partyprotocol::channel::ChannelConfig;
 
 use super::super::partyprotocol::{channel::Channel, packet::Packet};
 use std::array;
-use std::borrow::BorrowMut;
-use std::net::{UdpSocket,SocketAddr};
-use std::ops::Deref;
+use std::net::SocketAddr;
 use std::sync::{Arc,Mutex};
-use std::rc::Rc;
 
 
 const BUFFER_SEGMENTS:usize=10;
@@ -77,7 +72,7 @@ impl ChannelReceiver{
 
     // Receive a packet, and handle it.
     fn receive_packet(&mut self, packet: Packet, addr: SocketAddr){
-        if packet.header.index.get()==self.lidx+1{
+        if packet.get_index()==self.lidx+1{
             // Packet is in order
             self.lidx+=1;
 

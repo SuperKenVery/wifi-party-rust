@@ -3,9 +3,5 @@ name = "wifi-party-rust"
 version = "0.1.0"
 edition = "2021"
 
-[build-dependencies]
-prost-build = "0.11.9"
-
 [dependencies]
-safe-transmute = "0.11.2"
-zerocopy = "0.6.1"
+rkyv = { version = "0.7.42", features = ["bytecheck", "validation"] }

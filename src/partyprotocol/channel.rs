@@ -1,19 +1,17 @@
-use core::slice::SlicePattern;
 use std::{
     fmt,
     net::{SocketAddr, SocketAddrV4, UdpSocket},
     sync::Arc,
-    thread, io::BufRead,
+    thread,
 };
-use super::packet::{SerdePacket,Header};
-use zerocopy::{ByteSlice, LayoutVerified, byteorder, AsBytes};
+use super::packet::Packet;
 
 pub struct ChannelConfig {
     pub name: String,
     pub handler: Cb,
 }
 
-type Cb = Box<dyn FnMut(SerdePacket<&[u8]>, SocketAddr)->() + Send + 'static>;
+type Cb = Box<dyn FnMut(Packet, SocketAddr)->() + Send + 'static>;
 
 
 struct ReceiveChannel{
@@ -78,7 +76,7 @@ impl Channel {
             )
             .collect();
 
-        let receive_channels: Vec<_>=channels
+        let mut receive_channels: Vec<_>=channels
             .iter_mut()
             .map(|ch|ReceiveChannel::new(
                 ch.name.clone(),
@@ -102,17 +100,16 @@ impl Channel {
                 println!("Probable truncation occurred when receiving data from UDP socket");
             }
 
-            buf.truncate(length);
-            let buf=buf.into_boxed_slice();
-            let packet=SerdePacket::decode(buf);
+            let packet=Packet::decode(buf);
 
-            let Some(packet)=packet else{
+            let Ok(packet)=packet else{
                 println!("Received an invalid packet");
                 continue;
             };
 
-            for ch in &receive_channels{
-                if ch.id==packet.header.channel{
+
+            for ch in &mut receive_channels{
+                if ch.id==packet.get_channel(){
                     (ch.callback)(packet,src);
 
                     // Channel id should be unique
