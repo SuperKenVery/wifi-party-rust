@@ -7,7 +7,7 @@ use rkyv::{
     ser::{
         serializers::{BufferSerializer, AllocSerializer},
         Serializer,
-    },
+    }, vec::ArchivedVec, AlignedVec,
 };
 
 #[derive(Archive,Deserialize,Serialize,Debug,PartialEq)]
@@ -24,36 +24,35 @@ pub struct Header{
 #[derive(Archive,Serialize,Debug,PartialEq)]
 #[archive(check_bytes,compare(PartialEq))]
 #[archive_attr(derive(Debug))]
-struct ConstructedPacket{
+pub struct ConstructedPacket{
     pub header: Header,
     pub data: Vec<i16>,
 }
 
-struct OwnedArchivedPacket<'a>{
-    archive: Option<&'a ArchivedConstructedPacket>,
+pub struct OwnedArchivedPacket{
     buffer: Vec<u8>,
 }
 
-pub enum Packet<'a>{
+pub enum Packet{
     Constructed(ConstructedPacket),
-    Received(OwnedArchivedPacket<'a>),
+    Received(OwnedArchivedPacket),
 }
 
-impl<'a> Packet<'a>{
-    pub fn new(channel: u32, index: u32, data: Vec<i16>) -> Packet<'a>{
+impl Packet{
+    pub fn new(channel: u32, index: u32, data: Vec<i16>) -> Packet{
         Packet::Constructed(ConstructedPacket::new(channel,index,data))
     }
 
-    pub fn encode(&self, buf: &mut Vec<u8>) -> Result<(),Box<dyn Error>>{
+    pub fn encode(&self) -> Result<AlignedVec,Box<dyn Error>>{
         match self{
-            Packet::Constructed(packet) => packet.encode(buf),
-            Packet::Received(packet) => {
+            Packet::Constructed(packet) => packet.encode(),
+            Packet::Received(_) => {
                 Err("Sending a received packet".into())
             },
         }
     }
 
-    pub fn decode(buf: Vec<u8>) -> Result<Packet<'a>,Box<dyn Error>>{
+    pub fn decode(buf: Vec<u8>) -> Result<Packet,Box<dyn Error>>{
         let p=OwnedArchivedPacket::decode(buf)?;
 
         Ok(Packet::Received(p))
@@ -62,14 +61,21 @@ impl<'a> Packet<'a>{
     pub fn get_channel(&self) -> u32{
         match self{
             Packet::Constructed(packet) => packet.header.channel,
-            Packet::Received(packet) => packet.archive.unwrap().header.channel,
+            Packet::Received(packet) => packet.get_channel(),
         }
     }
 
     pub fn get_index(&self) -> u32{
         match self{
             Packet::Constructed(packet) => packet.header.index,
-            Packet::Received(packet) => packet.archive.unwrap().header.index,
+            Packet::Received(packet) => packet.get_index(),
+        }
+    }
+
+    pub fn get_data(&self) -> &[i16]{
+        match self{
+            Packet::Constructed(packet) => &packet.data,
+            Packet::Received(packet) => packet.get_data(),
         }
     }
 
@@ -87,31 +93,62 @@ impl ConstructedPacket {
         }
     }
 
-    pub fn encode(&self, buf: &mut Vec<u8>) -> Result<(),Box<dyn Error>>{
+    pub fn encode(&self) -> Result<AlignedVec,Box<dyn Error>>{
         let bytes=rkyv::to_bytes::<_,4096>(self)?;
-        buf.copy_from_slice(&bytes);
 
-        Ok(())
+        println!("Identifier {:?}",self.header.identifier);
+        println!("Bytes {:?}",bytes);
+
+        let archive=rkyv::check_archived_root::<ConstructedPacket>(&bytes);
+        println!("Archive {:?}",archive);
+
+        Ok(bytes)
     }
 }
 
-impl<'a> OwnedArchivedPacket<'a>{
-    fn decode(buf: Vec<u8>) -> Result<OwnedArchivedPacket<'a>,Box<dyn Error>>{
-        // let archive=rkyv::check_archived_root::<ConstructedPacket>(&buf)?;
+impl OwnedArchivedPacket{
+    fn decode(buf: Vec<u8>) -> Result<OwnedArchivedPacket,Box<dyn Error>>{
+        let archive_result=rkyv::check_archived_root::<ConstructedPacket>(&buf);
 
-        // Ok(OwnedArchivedPacket{
-        //     archive: archive,
-        //     buffer: buf,
-        // })
-        let mut ar=OwnedArchivedPacket{
-            archive: None,
-            buffer: buf,
+        match archive_result{
+            Ok(archive) => {
+                println!("Decoded Archive {:?}",archive);
+                if archive.header.identifier != ['w','p','p','\0']{
+                    Err(format!("Invalid identifier: {:?}",archive.header.identifier).into())
+                }else{
+                    Ok(OwnedArchivedPacket{
+                        buffer: buf,
+                    })
+                }
+            },
+            Err(e) => {
+                Err(e.into())
+            },
+        }
+    }
+
+    fn get_channel(&self) -> u32{
+        let archive=unsafe{
+            rkyv::archived_root::<ConstructedPacket>(&self.buffer)
         };
 
-        let archive=rkyv::check_archived_root::<ConstructedPacket>(&ar.buffer)?;
-        ar.archive=Some(archive);
+        archive.header.channel
+    }
 
-        Ok(ar)
+    fn get_index(&self) -> u32{
+        let archive=unsafe{
+            rkyv::archived_root::<ConstructedPacket>(&self.buffer)
+        };
+
+        archive.header.index
+    }
+
+    fn get_data(&self) -> &ArchivedVec<i16>{
+        let archive=unsafe{
+            rkyv::archived_root::<ConstructedPacket>(&self.buffer)
+        };
+
+        &archive.data
     }
 }
 
@@ -119,22 +156,18 @@ impl<'a> OwnedArchivedPacket<'a>{
 mod test{
     use super::*;
 
-
     #[test]
     fn test_packet(){
-        let packet=ConstructedPacket::new(0,0,vec![0,1,2,3,4,5,6,7,8,9]);
-        let serialized=rkyv::to_bytes::<_,4096>(&packet).unwrap();
-        let archive=rkyv::check_archived_root::<ConstructedPacket>(&serialized).unwrap();
+        let packet=Packet::new(0,0,vec![0,1,2,3,4,5,6,7,8,9]);
+        let encoded=packet.encode().unwrap();
 
-        let a=&archive.data;
-        assert_eq!(a, &vec![0,1,2,3,4,5,6,7,8,9]);
 
-        let b=&archive.header;
-        assert_eq!(b.identifier, ['w','p','p','\0']);
-        assert_eq!(b.channel, 0);
-        assert_eq!(b.index, 0);
+        let a=Packet::decode(encoded.into_vec()).unwrap();
 
-        assert_eq!(archive, &packet);
+        assert_eq!(a.get_data(), &vec![0,1,2,3,4,5,6,7,8,9]);
+
+        assert_eq!(a.get_channel(), 0);
+        assert_eq!(a.get_index(), 0);
     }
 
 }
