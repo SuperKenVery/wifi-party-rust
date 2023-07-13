@@ -1,28 +1,27 @@
+use super::packet::Packet;
 use std::{
     fmt,
     net::{SocketAddr, SocketAddrV4, UdpSocket},
     sync::Arc,
     thread,
 };
-use super::packet::Packet;
 
 pub struct ChannelConfig {
     pub name: String,
     pub handler: Cb,
 }
 
-type Cb = Box<dyn FnMut(Packet, SocketAddr)->() + Send + 'static>;
+type Cb = Box<dyn FnMut(Packet, SocketAddr) -> () + Send + 'static>;
 
-
-struct ReceiveChannel{
+struct ReceiveChannel {
     name: String,
     id: u32,
     callback: Cb,
 }
 
-impl ReceiveChannel{
-    pub fn new(name: String, id: u32, callback: Cb)->ReceiveChannel{
-        ReceiveChannel{
+impl ReceiveChannel {
+    pub fn new(name: String, id: u32, callback: Cb) -> ReceiveChannel {
+        ReceiveChannel {
             name: name,
             id,
             callback,
@@ -40,7 +39,13 @@ pub struct Channel {
 }
 
 impl Channel {
-    pub fn new(name: String, socket: Arc<UdpSocket>, addr: SocketAddrV4, id: u32, handler: Cb) -> Channel {
+    pub fn new(
+        name: String,
+        socket: Arc<UdpSocket>,
+        addr: SocketAddrV4,
+        id: u32,
+        handler: Cb,
+    ) -> Channel {
         Channel {
             name,
             id,
@@ -72,22 +77,25 @@ impl Channel {
         let mut channels: Vec<_> = channel_configs
             .into_iter()
             .enumerate()
-            .map(|(id, cfg)|Channel::new(cfg.name, socket.clone(), addr.clone(),id as u32, cfg.handler)
-            )
+            .map(|(id, cfg)| {
+                Channel::new(
+                    cfg.name,
+                    socket.clone(),
+                    addr.clone(),
+                    id as u32,
+                    cfg.handler,
+                )
+            })
             .collect();
 
-        let mut receive_channels: Vec<_>=channels
+        let mut receive_channels: Vec<_> = channels
             .iter_mut()
-            .map(|ch|ReceiveChannel::new(
-                ch.name.clone(),
-                ch.id,
-                ch.callback.take().unwrap()
-            ))
+            .map(|ch| ReceiveChannel::new(ch.name.clone(), ch.id, ch.callback.take().unwrap()))
             .collect();
 
         thread::spawn(move || loop {
             const BUF_LENGTH: usize = 4096;
-            let mut buf=vec![0;BUF_LENGTH];
+            let mut buf = vec![0; BUF_LENGTH];
 
             let result = socket.recv_from(&mut buf);
 
@@ -100,17 +108,16 @@ impl Channel {
                 println!("Probable truncation occurred when receiving data from UDP socket");
             }
 
-            let packet=Packet::decode(buf);
+            let packet = Packet::decode(buf);
 
             let Ok(packet)=packet else{
                 println!("Received an invalid packet");
                 continue;
             };
 
-
-            for ch in &mut receive_channels{
-                if ch.id==packet.get_channel(){
-                    (ch.callback)(packet,src);
+            for ch in &mut receive_channels {
+                if ch.id == packet.get_channel() {
+                    (ch.callback)(packet, src);
 
                     // Channel id should be unique
                     break;

@@ -2,36 +2,33 @@
 // into a buffer, and handle out-of-order delivery and
 // packet loss.
 
-use crate::partyprotocol::channel::ChannelConfig;
+use super::super::partyprotocol::{channel::Channel, channel::ChannelConfig, packet::Packet};
 
-use super::super::partyprotocol::{channel::Channel, packet::Packet};
-use std::array;
-use std::net::SocketAddr;
-use std::sync::{Arc,Mutex};
+use std::{
+    array, fmt,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 
+const BUFFER_SEGMENTS: usize = 10;
 
-const BUFFER_SEGMENTS:usize=10;
-
-pub struct ChannelReceiverBuildConfig{
+pub struct ChannelReceiverBuildConfig {
     addr: Option<String>,
     names: Vec<String>,
 }
 
-struct A{
-    s: [i16],
-}
-pub struct ChannelReceiver{
+pub struct ChannelReceiver {
     name: String,
-    segments: [Option<Box<[i16]>>;BUFFER_SEGMENTS],
+    segments: [Option<Box<[i16]>>; BUFFER_SEGMENTS],
     ridx: usize, // Read index, points to an already read space i.e. To read, use segments[ridx+1]
     widx: usize, // Write index, points to next available space
-    lidx: u32, // Last received index
+    lidx: u32,   // Last received index
     missed: Vec<usize>, // What packet indexes are missing
 }
 
-impl ChannelReceiver{
+impl ChannelReceiver {
     fn new(name: &str) -> ChannelReceiver {
-        ChannelReceiver{
+        ChannelReceiver {
             name: name.to_string(),
             segments: array::from_fn(|_| None),
             ridx: 0,
@@ -41,63 +38,63 @@ impl ChannelReceiver{
         }
     }
 
-    pub fn build(config: ChannelReceiverBuildConfig) -> (Vec<Arc<Mutex<ChannelReceiver>>>,Vec<Channel>){
-        let mut receivers=Vec::with_capacity(config.names.len());
-        let channel_configs=config
+    pub fn build(
+        config: ChannelReceiverBuildConfig,
+    ) -> (Vec<Arc<Mutex<ChannelReceiver>>>, Vec<Channel>) {
+        let mut receivers = Vec::with_capacity(config.names.len());
+        let channel_configs = config
             .names
             .iter()
-            .map(|name|{
-                let receiver=Arc::new(
-                    Mutex::new(
-                            ChannelReceiver::new(name)
-                    )
-                );
+            .map(|name| {
+                let receiver = Arc::new(Mutex::new(ChannelReceiver::new(name)));
                 receivers.push(receiver.clone());
 
-                let r=receiver.clone();
-                ChannelConfig{
+                let r = receiver.clone();
+                ChannelConfig {
                     name: name.clone(),
-                    handler: Box::new(move |packet: Packet, addr: SocketAddr|{
+                    handler: Box::new(move |packet: Packet, addr: SocketAddr| {
                         r.lock().unwrap().receive_packet(packet, addr);
                     }),
                 }
             })
             .collect();
 
-        let channels=Channel::build(channel_configs,config.addr.as_deref());
+        let channels = Channel::build(channel_configs, config.addr.as_deref());
 
-        (receivers,channels)
-
+        (receivers, channels)
     }
 
     // Receive a packet, and handle it.
-    fn receive_packet(&mut self, packet: Packet, addr: SocketAddr){
-        if packet.get_index()==self.lidx+1{
+    fn receive_packet(&mut self, packet: Packet, addr: SocketAddr) {
+        if packet.get_index() == self.lidx + 1 {
             // Packet is in order
-            self.lidx+=1;
+            self.lidx += 1;
 
-            if self.widx==self.ridx+1{
+            if self.widx == self.ridx + 1 {
                 // Buffer is full, drop the oldest segment
                 // |8|9|10|1|2|3|4|5|6|7|
                 //      ^r ^w
-                self.ridx+=1;
-                if self.ridx==self.segments.len(){
-                    self.ridx=0;
+                self.ridx += 1;
+                if self.ridx == self.segments.len() {
+                    self.ridx = 0;
                 }
 
                 // self.segments[self.widx]=packet.data;
-                self.widx+=1;
-                if self.widx==self.segments.len(){
-                    self.widx=0;
+                self.widx += 1;
+                if self.widx == self.segments.len() {
+                    self.widx = 0;
                 }
-
             }
         }
     }
 
     // Read sound
     // Fills up the buffer
-    fn read(&mut self, buffer: &mut [i16]){
+    fn read(&mut self, buffer: &mut [i16]) {}
+}
 
+impl fmt::Display for ChannelReceiver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ChannelReceiver({})", self.name)
     }
 }

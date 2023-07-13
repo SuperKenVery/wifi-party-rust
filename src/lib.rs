@@ -1,2 +1,2 @@
-pub mod partyprotocol;
 pub mod libwifiparty;
+pub mod partyprotocol;
